@@ -1,14 +1,24 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Upload, FileText, Bot, User } from 'lucide-react'
+import { Send, Upload, FileText, Bot, User, MessageSquare, Brain, Trophy, GraduationCap, Settings } from 'lucide-react'
+import SettingsPanel from './SettingsPanel'
 
 interface Message {
   id: string
   text: string
   sender: 'user' | 'bot'
   timestamp: Date
+  isAI?: boolean // Indicate if response came from AI
 }
+
+// Conversation starters
+const conversationStarters = [
+  { icon: Brain, text: "What are my key technical skills?", category: "Skills" },
+  { icon: Trophy, text: "Tell me about my achievements", category: "Experience" },
+  { icon: GraduationCap, text: "How can I improve my resume?", category: "Growth" },
+  { icon: MessageSquare, text: "Prepare me for interviews", category: "Interview" }
+]
 
 export default function ResumeChatbot() {
   const [messages, setMessages] = useState<Message[]>([])
@@ -16,6 +26,9 @@ export default function ResumeChatbot() {
   const [isLoading, setIsLoading] = useState(false)
   const [resumeUploaded, setResumeUploaded] = useState(false)
   const [resumeContent, setResumeContent] = useState('')
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [showSettings, setShowSettings] = useState(false)
+  const [darkMode, setDarkMode] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -32,32 +45,57 @@ export default function ResumeChatbot() {
 
     try {
       setIsLoading(true)
+      setUploadProgress(0)
+      
+      // Simulate upload progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => Math.min(prev + 10, 90))
+      }, 100)
+
       const response = await fetch('/api/upload-resume', {
         method: 'POST',
         body: formData,
       })
+
+      clearInterval(progressInterval)
+      setUploadProgress(100)
 
       if (response.ok) {
         const data = await response.json()
         setResumeContent(data.content)
         setResumeUploaded(true)
         
-        // Add welcome message
+        // Add enhanced welcome message
         const welcomeMessage: Message = {
           id: Date.now().toString(),
-          text: "Great! I've analyzed your resume. Now you can ask me anything about your career journey, skills, experience, or achievements. What would you like to know?",
+          text: `Perfect! I've successfully analyzed your resume (${data.filename}). I can now help you with:\n\n• Exploring your technical skills and experience\n• Identifying key achievements and strengths\n• Preparing for interviews\n• Suggesting areas for professional growth\n• Optimizing your resume presentation\n\nWhat would you like to discuss first?`,
           sender: 'bot',
           timestamp: new Date(),
         }
         setMessages([welcomeMessage])
+        
+        // Show warnings if any
+        if (data.warnings && data.warnings.length > 0) {
+          setTimeout(() => {
+            const warningMessage: Message = {
+              id: Date.now().toString() + '_warning',
+              text: `📝 **Suggestions for your resume:**\n${data.warnings.map((w: string) => `• ${w}`).join('\n')}`,
+              sender: 'bot',
+              timestamp: new Date(),
+            }
+            setMessages(prev => [...prev, warningMessage])
+          }, 1000)
+        }
       } else {
-        throw new Error('Failed to upload resume')
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to upload resume')
       }
     } catch (error) {
       console.error('Error uploading resume:', error)
-      alert('Failed to upload resume. Please try again.')
+      alert(`Failed to upload resume: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`)
     } finally {
       setIsLoading(false)
+      setUploadProgress(0)
     }
   }
 
@@ -72,6 +110,7 @@ export default function ResumeChatbot() {
     }
 
     setMessages(prev => [...prev, userMessage])
+    const currentInput = input
     setInput('')
     setIsLoading(true)
 
@@ -82,7 +121,7 @@ export default function ResumeChatbot() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: input,
+          message: currentInput,
           resumeContent,
           chatHistory: messages,
         }),
@@ -95,16 +134,18 @@ export default function ResumeChatbot() {
           text: data.response,
           sender: 'bot',
           timestamp: new Date(),
+          isAI: data.isAI || false, // Track if response came from AI
         }
         setMessages(prev => [...prev, botMessage])
       } else {
-        throw new Error('Failed to get response')
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to get response')
       }
     } catch (error) {
       console.error('Error sending message:', error)
       const errorMessage: Message = {
         id: Date.now().toString() + '_error',
-        text: "Sorry, I encountered an error. Please try again.",
+        text: `Sorry, I encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`,
         sender: 'bot',
         timestamp: new Date(),
       }
@@ -121,18 +162,65 @@ export default function ResumeChatbot() {
     }
   }
 
+  const handleStarterClick = (starterText: string) => {
+    if (isLoading) return
+    setInput(starterText)
+    // Auto-send the message
+    setTimeout(() => {
+      const event = {
+        target: { value: starterText }
+      } as React.ChangeEvent<HTMLTextAreaElement>
+      setInput(starterText)
+      setTimeout(() => sendMessage(), 100)
+    }, 50)
+  }
+
+  const handleClearChat = () => {
+    setMessages([])
+    setShowSettings(false)
+  }
+
+  const handleExportChat = () => {
+    const chatText = messages
+      .map(msg => `[${msg.timestamp.toLocaleString()}] ${msg.sender.toUpperCase()}: ${msg.text}`)
+      .join('\n\n')
+    
+    const blob = new Blob([chatText], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `resume-chat-${new Date().toISOString().split('T')[0]}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setShowSettings(false)
+  }
+
   return (
     <div className="max-w-4xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
       {/* Header */}
       <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6">
-        <div className="flex items-center space-x-3">
-          <Bot size={32} />
-          <div>
-            <h2 className="text-xl font-semibold">Career Assistant</h2>
-            <p className="text-blue-100">
-              {resumeUploaded ? 'Ready to chat about your resume!' : 'Upload your resume to get started'}
-            </p>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <Bot size={32} />
+            <div>
+              <h2 className="text-xl font-semibold">Career Assistant</h2>
+              <p className="text-blue-100">
+                {resumeUploaded ? 'Ready to chat about your resume!' : 'Upload your resume to get started'}
+              </p>
+            </div>
           </div>
+          
+          {resumeUploaded && (
+            <button
+              onClick={() => setShowSettings(true)}
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              title="Settings"
+            >
+              <Settings size={20} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -146,8 +234,21 @@ export default function ResumeChatbot() {
             Upload Your Resume
           </h3>
           <p className="text-gray-600 dark:text-gray-300 mb-6">
-            Supported formats: PDF, TXT, DOC, DOCX
+            Supported formats: PDF, TXT, DOC, DOCX (Max 10MB)
           </p>
+          
+          {isLoading && (
+            <div className="mb-4">
+              <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
+                <div 
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                ></div>
+              </div>
+              <p className="text-sm text-gray-600">Uploading and analyzing... {uploadProgress}%</p>
+            </div>
+          )}
+          
           <input
             type="file"
             ref={fileInputRef}
@@ -161,7 +262,7 @@ export default function ResumeChatbot() {
             className="inline-flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white px-6 py-3 rounded-lg font-medium transition-colors"
           >
             <Upload size={20} />
-            <span>{isLoading ? 'Uploading...' : 'Choose Resume File'}</span>
+            <span>{isLoading ? 'Processing...' : 'Choose Resume File'}</span>
           </button>
         </div>
       )}
@@ -169,6 +270,29 @@ export default function ResumeChatbot() {
       {/* Chat Messages */}
       {resumeUploaded && (
         <div className="h-96 overflow-y-auto p-6 space-y-4">
+          {/* Conversation Starters - Show only when no messages */}
+          {messages.length <= 1 && (
+            <div className="mb-6">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Quick Questions to Get Started:</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {conversationStarters.map((starter, index) => {
+                  const IconComponent = starter.icon
+                  return (
+                    <button
+                      key={index}
+                      onClick={() => handleStarterClick(starter.text)}
+                      disabled={isLoading}
+                      className="flex items-center space-x-2 p-3 text-left bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg transition-colors text-sm disabled:opacity-50"
+                    >
+                      <IconComponent size={16} className="text-blue-600 dark:text-blue-400" />
+                      <span className="text-gray-700 dark:text-gray-300">{starter.text}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {messages.map((message) => (
             <div
               key={message.id}
@@ -195,9 +319,31 @@ export default function ResumeChatbot() {
                       : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-white'
                   }`}
                 >
-                  <p className="text-sm whitespace-pre-wrap">{message.text}</p>
-                  <span className="text-xs opacity-70 mt-1 block">
-                    {message.timestamp.toLocaleTimeString()}
+                  <div className="text-sm whitespace-pre-wrap">
+                    {/* Render formatted text for bot messages */}
+                    {message.sender === 'bot' ? (
+                      <div 
+                        className="prose prose-sm max-w-none dark:prose-invert"
+                        dangerouslySetInnerHTML={{
+                          __html: message.text
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                            .replace(/• /g, '• ')
+                            .replace(/(\d+\.)/g, '<strong>$1</strong>')
+                            .replace(/([🔧⚡💾☁️📧📱💼💻📅👔🏆📝])/g, '$1')
+                        }}
+                      />
+                    ) : (
+                      <p>{message.text}</p>
+                    )}
+                  </div>
+                  <span className="text-xs opacity-70 mt-2 flex items-center justify-between">
+                    <span>{message.timestamp.toLocaleTimeString()}</span>
+                    {message.sender === 'bot' && message.isAI && (
+                      <span className="inline-flex items-center space-x-1 text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-2 py-1 rounded-full">
+                        <Brain size={10} />
+                        <span>AI</span>
+                      </span>
+                    )}
                   </span>
                 </div>
               </div>
@@ -249,6 +395,16 @@ export default function ResumeChatbot() {
           </p>
         </div>
       )}
+      
+      {/* Settings Panel */}
+      <SettingsPanel
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        onClearChat={handleClearChat}
+        onExportChat={handleExportChat}
+        darkMode={darkMode}
+        onToggleDarkMode={() => setDarkMode(!darkMode)}
+      />
     </div>
   )
 }
